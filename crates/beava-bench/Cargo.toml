@@ -34,9 +34,9 @@ futures = { workspace = true }
 bytes = { workspace = true }
 rmp-serde = { workspace = true }
 thiserror = { workspace = true }
-# Phase 13.5 Plan 08: humantime for --duration parsing; inquire for interactive walkthrough.
-humantime = { workspace = true }
+humantime.workspace = true
 inquire = { workspace = true }
+tokio-util.workspace = true
 
 [dev-dependencies]
 tempfile = { workspace = true }

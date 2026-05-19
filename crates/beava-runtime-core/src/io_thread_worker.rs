@@ -282,6 +282,7 @@ fn worker_main_loop<B: IoBackend>(mut backend: B, cfg: WorkerConfig) {
         // steady-state hot path.
         while let Ok((slot, encoder)) = write_rx.try_recv() {
             if let Some(c) = clients.get_mut(&slot) {
+                // tracing::info!("write slot buffer @{slot}");
                 let proto = c.proto;
                 encoder(proto, &pool, &mut c.write_buf);
                 // Arm WRITABLE interest so the backend fires Writable events.
@@ -563,6 +564,7 @@ fn parse_and_push(
 /// Flush `client.write_buf` to the socket via `backend.write()`.
 /// Removes fully-written bytes; disarms WRITABLE interest if buffer is empty.
 fn flush_write_buf<B: IoBackend>(slot: u64, client: &mut WorkerClient, backend: &mut B) {
+    // tracing::info!("flushing slot buffer @{slot}");
     while !client.write_buf.is_empty() {
         match backend.write(slot, &client.write_buf) {
             Ok(0) => break, // WouldBlock or closed

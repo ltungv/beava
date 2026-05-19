@@ -11,6 +11,7 @@ pub mod feature_query;
 pub mod http_admin;
 pub mod idem_cache;
 pub mod logging;
+pub mod net;
 pub mod quickstart;
 pub mod recovery;
 pub mod register;

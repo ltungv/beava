@@ -11,10 +11,7 @@
 //! or many frames — the caller loops until `Ok(None)` (need more bytes) is
 //! returned.
 
-use beava_core::wire::{
-    decode_frame, CT_JSON, CT_MSGPACK, OP_BATCH_GET, OP_GET, OP_GET_MULTI, OP_MGET, OP_PING,
-    OP_PUSH, OP_REGISTER, OP_RESET,
-};
+use beava_core::wire::decode_frame;
 use bytes::BytesMut;
 use std::net::SocketAddr;
 
@@ -733,136 +730,13 @@ pub fn parse_wire_request(
         Some(f) => f,
         None => return Ok(None),
     };
-
-    let req = match frame.op {
-        OP_PING => WireRequest::Ping,
-        // TCP register accepts CT_JSON only. Other content types surface as
-        // `unsupported_content_type` via ParseError — the apply-shard
-        // dispatcher classifies it as a TcpError.
-        OP_REGISTER => match frame.content_type {
-            CT_JSON => WireRequest::Register {
-                payload: frame.payload,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type for register: {other:#04x}"),
-            },
-        },
-        OP_PUSH => {
-            match frame.content_type {
-                CT_JSON => {
-                    // Zero-copy envelope scan. Body slice aliases
-                    // frame.payload directly; no re-serialise.
-                    match parse_json_envelope(&frame.payload) {
-                        Ok((event_name, body_bytes)) => {
-                            // Slice frame.payload to keep the Bytes refcounted view.
-                            let body_start =
-                                body_bytes.as_ptr() as usize - frame.payload.as_ptr() as usize;
-                            let body_end = body_start + body_bytes.len();
-                            let body = frame.payload.slice(body_start..body_end);
-                            WireRequest::TcpPush {
-                                event_name: event_name.to_string(),
-                                body,
-                                body_format: CT_JSON,
-                            }
-                        }
-                        Err(e) => WireRequest::ParseError {
-                            reason: e.to_string(),
-                        },
-                    }
-                }
-                CT_MSGPACK => {
-                    // Hand-rolled scanner via rmp::decode primitives. No serde,
-                    // no JsonValue, no body re-encode — body slice aliases
-                    // frame.payload directly.
-                    match parse_msgpack_envelope(&frame.payload) {
-                        Ok((event_name, body_bytes)) => {
-                            // Bytes::from triggers a refcount-bump copy out of the
-                            // frame.payload Bytes. To stay zero-copy across the
-                            // WireRequest boundary we slice the original Bytes.
-                            let body_start =
-                                body_bytes.as_ptr() as usize - frame.payload.as_ptr() as usize;
-                            let body_end = body_start + body_bytes.len();
-                            let body = frame.payload.slice(body_start..body_end);
-                            WireRequest::TcpPush {
-                                event_name: event_name.to_string(),
-                                body,
-                                body_format: CT_MSGPACK,
-                            }
-                        }
-                        Err(e) => WireRequest::ParseError {
-                            reason: format!("msgpack envelope parse failed: {e}"),
-                        },
-                    }
-                }
-                other => WireRequest::ParseError {
-                    reason: format!("unsupported content_type: {other:#04x}"),
-                },
-            }
-        }
-        // TCP /get variants — body is opaque to the parser; dispatch
-        // (apply_shard) deserialises the JSON / MsgPack body into
-        // {feature, key} or {keys, features}.
-        OP_GET => match frame.content_type {
-            CT_JSON | CT_MSGPACK => WireRequest::TcpGet {
-                body: frame.payload,
-                body_format: frame.content_type,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type: {other:#04x}"),
-            },
-        },
-        OP_MGET => match frame.content_type {
-            CT_JSON | CT_MSGPACK => WireRequest::TcpMGet {
-                body: frame.payload,
-                body_format: frame.content_type,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type: {other:#04x}"),
-            },
-        },
-        OP_GET_MULTI => match frame.content_type {
-            CT_JSON | CT_MSGPACK => WireRequest::TcpGetMulti {
-                body: frame.payload,
-                body_format: frame.content_type,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type: {other:#04x}"),
-            },
-        },
-        // OP_BATCH_GET (0x0024) — heterogeneous batched read. Body shape
-        // `{"requests":[{"table","entity_id"}, ...]}` is opaque to the parser;
-        // dispatch (`apply_shard.rs::dispatch_batch_get_sync`) deserialises
-        // per body_format.
-        OP_BATCH_GET => match frame.content_type {
-            CT_JSON | CT_MSGPACK => WireRequest::TcpBatchGet {
-                body: frame.payload,
-                body_format: frame.content_type,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type: {other:#04x}"),
-            },
-        },
-        // OP_RESET (0x0040) — full state + registry clear, gated server-side
-        // on test_mode. Body is empty `{}`; the parser is body-shape-agnostic
-        // (dispatch tolerates any body for compat).
-        OP_RESET => match frame.content_type {
-            CT_JSON | CT_MSGPACK => WireRequest::TcpReset {
-                body: frame.payload,
-                body_format: frame.content_type,
-            },
-            other => WireRequest::ParseError {
-                reason: format!("unsupported content_type: {other:#04x}"),
-            },
-        },
-        op => WireRequest::Unknown { op },
-    };
-    Ok(Some(req))
+    Ok(Some(frame.into()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use beava_core::wire::{encode_frame, Frame, CT_JSON};
+    use beava_core::wire::{encode_frame, Frame, CT_JSON, OP_PING, OP_PUSH};
     use bytes::Bytes;
 
     fn make_frame(op: u16, payload: impl Into<Bytes>) -> BytesMut {
