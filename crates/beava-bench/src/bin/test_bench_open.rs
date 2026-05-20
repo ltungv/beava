@@ -56,11 +56,8 @@ fn main() {
     let measurements: Vec<Histogram<u64>> = runtime.block_on(run(&args));
 
     let mut total_requests: u64 = 0;
-    let mut combined_round_trip = Histogram::<u64>::new_with_max(
-        Duration::from_secs(60).as_micros().try_into().unwrap(),
-        SIGNIFICANT_DECIMAL_DIGITS,
-    )
-    .unwrap();
+    let mut combined_round_trip =
+        Histogram::<u64>::new_with_max(60_000_000, SIGNIFICANT_DECIMAL_DIGITS).unwrap();
 
     for round_trip_durations in measurements.into_iter() {
         total_requests += round_trip_durations.len();
@@ -185,7 +182,6 @@ async fn writer_task(
             break;
         }
     }
-    let _ = stream.shutdown().await;
 }
 
 async fn reader_task(
@@ -196,11 +192,8 @@ async fn reader_task(
     let mut read_buf = BytesMut::with_capacity(8 * 1024);
     let mut pending_decoded: VecDeque<Instant> = VecDeque::with_capacity(4096 * 4);
     let mut pending_frame_start: VecDeque<Instant> = VecDeque::with_capacity(4096 * 4);
-    let mut histogram = Histogram::<u64>::new_with_max(
-        Duration::from_secs(60).as_micros().try_into().unwrap(),
-        SIGNIFICANT_DECIMAL_DIGITS,
-    )
-    .unwrap();
+    let mut histogram =
+        Histogram::<u64>::new_with_max(60_000_000, SIGNIFICANT_DECIMAL_DIGITS).unwrap();
 
     loop {
         // Drain all complete frames that are already in the buffer.
@@ -208,9 +201,8 @@ async fn reader_task(
             match decode_frame(&mut read_buf, MAX_FRAME_BYTES) {
                 Ok(Some(_)) => {
                     if let Some(frame_start) = pending_frame_start.pop_front() {
-                        histogram
-                            .record(frame_start.elapsed().as_micros().try_into().unwrap())
-                            .unwrap();
+                        let elapsed = frame_start.elapsed().as_micros() as u64;
+                        histogram.record(elapsed.clamp(0, 60_000_000)).unwrap();
                     } else {
                         pending_decoded.push_back(Instant::now());
                     }
@@ -225,18 +217,18 @@ async fn reader_task(
 
         // When the sender is closed and all pending timestamps are matched, we're done.
         if tx_closed && pending_frame_start.is_empty() {
-            break;
+            return histogram;
         }
 
         select! {
             result = stream.read_buf(&mut read_buf) => {
                 match result {
                     Ok(n) => if n == 0 {
-                        break;
+                        return histogram;
                     },
                     Err(e) => {
                         eprintln!("read error: {e}");
-                        break;
+                        return histogram;
                     }
                 }
             }
@@ -244,9 +236,8 @@ async fn reader_task(
                 match recv {
                     Some(frame_start) => {
                         if let Some(frame_parsed) = pending_decoded.pop_front() {
-                            histogram
-                                .record((frame_parsed - frame_start).as_micros().try_into().unwrap())
-                                .unwrap();
+                            let elapsed = (frame_parsed - frame_start).as_micros() as u64;
+                            histogram.record(elapsed.clamp(0, 60_000_000)).unwrap();
                         } else {
                             pending_frame_start.push_back(frame_start);
                         }
@@ -258,6 +249,4 @@ async fn reader_task(
             }
         }
     }
-
-    histogram
 }

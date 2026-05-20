@@ -252,7 +252,10 @@ impl Listener {
         let mut backoff = self.min_backoff_ms;
         loop {
             match self.listener.accept().await {
-                Ok((socket, _)) => return Ok(socket),
+                Ok((socket, _)) => {
+                    socket.set_nodelay(true)?;
+                    return Ok(socket);
+                }
                 Err(err) => {
                     if backoff > self.max_backoff_ms {
                         return Err(err.into());

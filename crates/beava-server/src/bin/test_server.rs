@@ -18,7 +18,7 @@ pub async fn main() -> Result<(), anyhow::Error> {
         signal::ctrl_c(),
         server::Configuration {
             host: IpAddr::V4(Ipv4Addr::from_octets([0, 0, 0, 0])),
-            port: 3000,
+            port: 3306,
             min_backoff_ms: 125,
             max_backoff_ms: 64000,
             max_connections: 1024,
