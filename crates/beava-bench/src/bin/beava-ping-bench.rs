@@ -23,6 +23,7 @@ use anyhow::Result;
 use beava_core::wire::{decode_frame, encode_frame, Frame, CT_JSON, OP_PING};
 use bytes::{Bytes, BytesMut};
 use clap::Parser;
+use futures::{stream::FuturesUnordered, StreamExt};
 use hdrhistogram::Histogram;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -109,7 +110,10 @@ async fn run_worker(
     'outer: while let Some(scheduled) = ts_rx.recv().await {
         loop {
             match decode_frame(&mut buf, MAX_FRAME_BYTES) {
-                Ok(Some(_)) => break,
+                Ok(Some(frame)) => {
+                    dbg!(frame);
+                    break;
+                }
                 Ok(None) => {
                     if read_half.read_buf(&mut buf).await.unwrap_or(0) == 0 {
                         break 'outer;
@@ -169,9 +173,9 @@ async fn main() -> Result<()> {
         });
     }
 
-    let mut handles = Vec::with_capacity(cli.connections);
+    let mut workers = FuturesUnordered::new();
     for _ in 0..cli.connections {
-        handles.push(tokio::spawn(run_worker(
+        workers.push(tokio::spawn(run_worker(
             cli.addr,
             ping.clone(),
             interval,
@@ -181,8 +185,8 @@ async fn main() -> Result<()> {
     }
 
     let mut combined = Histogram::<u64>::new_with_bounds(1, HIST_MAX_US, HIST_SIGFIGS)?;
-    for h in handles {
-        combined.add(h.await??)?;
+    while let Some(worker) = workers.next().await {
+        combined.add(worker??)?;
     }
 
     let samples = combined.len();
