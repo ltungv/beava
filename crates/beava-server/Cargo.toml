@@ -304,6 +304,7 @@ reqwest = { workspace = true, optional = true }
 # when the TestServer drops). Gated behind the `testing` feature alongside
 # reqwest because tempfile is only used inside `testing.rs`.
 tempfile = { workspace = true, optional = true }
+console-subscriber = "0.5.0"
 
 [dev-dependencies]
 beava-runtime-core = { path = "../beava-runtime-core" }
