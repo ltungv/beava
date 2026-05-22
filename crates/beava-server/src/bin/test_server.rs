@@ -2,28 +2,19 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use beava_server::net::server::{self, Server};
 use tokio::signal;
-use tracing::subscriber::set_global_default;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 pub async fn main() -> Result<(), anyhow::Error> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let console_layer = console_subscriber::spawn();
+    // let fmt_layer = tracing_subscriber::fmt::layer();
 
-    // build a `Subscriber` by combining layers with a
-    // `tracing_subscriber::Registry`:
     tracing_subscriber::registry()
-        // add the console layer to the subscriber
+        .with(env_filter)
         .with(console_layer)
-        // add other layers...
-        .with(
-            FmtSubscriber::builder()
-                .with_env_filter(env_filter)
-                .finish(),
-        )
+        // .with(fmt_layer)
         .init();
-
-    set_global_default(subscriber).expect("Failed to set subscriber.");
 
     let server = Server::new(
         signal::ctrl_c(),

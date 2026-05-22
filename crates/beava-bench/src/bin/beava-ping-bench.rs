@@ -95,13 +95,16 @@ async fn run_worker(
                 Instant::now()
             };
 
-            if ts_tx.send(scheduled).await.is_err() {
+            if let Err(err) = ts_tx.send(scheduled).await {
+                eprintln!("{err}");
                 break;
             }
-            if write_half.write_all(&ping).await.is_err() {
+            if let Err(err) = write_half.write_all(&ping).await {
+                eprintln!("{err}");
                 break;
             }
         }
+        write_half.shutdown().await.ok();
     });
 
     // For a single TCP stream, responses always arrive in the same order as
@@ -110,8 +113,7 @@ async fn run_worker(
     'outer: while let Some(scheduled) = ts_rx.recv().await {
         loop {
             match decode_frame(&mut buf, MAX_FRAME_BYTES) {
-                Ok(Some(frame)) => {
-                    dbg!(frame);
+                Ok(Some(_)) => {
                     break;
                 }
                 Ok(None) => {

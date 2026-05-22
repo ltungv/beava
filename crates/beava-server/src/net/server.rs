@@ -9,7 +9,7 @@ use beava_runtime_core::WireRequest;
 use bytes::Bytes;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, oneshot, watch, Semaphore},
+    sync::{mpsc, watch, Semaphore},
     time,
 };
 use tracing::{debug, error, info};
@@ -33,7 +33,7 @@ const APPLY_CHANNEL_CAPACITY: usize = 16_384;
 /// rendezvous-bound to a single waiting task instead of routed by `slot_idx`.
 struct Dispatch {
     request: WireRequest,
-    reply_tx: oneshot::Sender<Vec<GlueResponse>>,
+    reply_tx: mpsc::Sender<Vec<GlueResponse>>,
 }
 
 /// Provide methods and hold states for a Redis server. The server will exist when `shutdown`
@@ -325,6 +325,8 @@ impl Handler {
     /// it reaches a safe state, at which point it is terminated.
     #[tracing::instrument(skip(self))]
     async fn run(mut self) -> Result<(), super::Error> {
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+
         // Keeps ingesting frames when the server is still running
         while !self.shutdown.is_shutdown() {
             // Awaiting for a shutdown event or a new frame
@@ -347,13 +349,12 @@ impl Handler {
             // Convert Frame → WireRequest.
             let request = WireRequest::from(frame);
 
-            // Pair the request with a fresh oneshot so the apply worker can
-            // identify "who to reply to" without explicit routing keys.
-            let (reply_tx, reply_rx) = oneshot::channel();
-
             if self
                 .dispatch_tx
-                .send(Dispatch { request, reply_tx })
+                .send(Dispatch {
+                    request,
+                    reply_tx: reply_tx.clone(),
+                })
                 .await
                 .is_err()
             {
@@ -364,9 +365,9 @@ impl Handler {
             // Suspend until the apply worker produces a response. No CPU
             // spin — the task yields to the tokio scheduler until the
             // oneshot fires.
-            let responses = match reply_rx.await {
-                Ok(resps) => resps,
-                Err(_canceled) => {
+            let responses = match reply_rx.recv().await {
+                Some(resps) => resps,
+                None => {
                     error!("apply worker dropped reply_tx without responding");
                     return Ok(());
                 }
@@ -398,7 +399,7 @@ fn run_apply_worker(mut dispatch_rx: mpsc::Receiver<Dispatch>, apply_shard: Appl
         // `send` only fails if the receiving connection task was dropped
         // (e.g. client disconnected while the request was in flight).
         // That's fine — discard the response and move on.
-        let _ = reply_tx.send(responses);
+        let _ = reply_tx.blocking_send(responses);
     }
 
     info!("apply-worker thread: dispatch_rx closed, exiting");
